@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 function repoRoot(cwd: string): string {
@@ -11,8 +12,14 @@ function repoRoot(cwd: string): string {
 	}
 }
 
+function expandHome(inputPath: string): string {
+	if (inputPath === "~") return os.homedir();
+	if (inputPath.startsWith("~/")) return path.join(os.homedir(), inputPath.slice(2));
+	return inputPath;
+}
+
 function resolvePossiblyMissingPath(inputPath: string, cwd: string): string {
-	const absolute = path.resolve(cwd, inputPath);
+	const absolute = path.resolve(cwd, expandHome(inputPath));
 	const parsed = path.parse(absolute);
 	let current = absolute;
 	const missingParts: string[] = [];
@@ -42,12 +49,21 @@ function toolPaths(toolName: string, input: Record<string, unknown>): string[] {
 // but this catches common absolute paths and relative paths that escape via ../.
 function bashPaths(command: string): string[] {
 	const paths = new Set<string>();
+	const ignoredPaths = new Set(["/dev/null"]);
 	const tokenPattern = /(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/g;
 	let match: RegExpExecArray | null;
 	while ((match = tokenPattern.exec(command)) !== null) {
-		const token = match[1] ?? match[2] ?? match[3] ?? "";
+		let token = match[1] ?? match[2] ?? match[3] ?? "";
 		if (/^[a-z]+:\/\//i.test(token)) continue;
-		if (path.isAbsolute(token) || token.startsWith("../") || token === ".." || token.includes("/../")) {
+		if (ignoredPaths.has(token)) continue;
+		if (
+			path.isAbsolute(token) ||
+			token === "~" ||
+			token.startsWith("~/") ||
+			token.startsWith("../") ||
+			token === ".." ||
+			token.includes("/../")
+		) {
 			paths.add(token);
 		}
 	}
