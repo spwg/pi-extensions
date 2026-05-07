@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -36,6 +36,59 @@ function resolvePossiblyMissingPath(inputPath: string, cwd: string): string {
 function isInside(root: string, candidate: string): boolean {
 	const relative = path.relative(root, candidate);
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function approvalLogPath(): string {
+	return path.join(os.homedir(), ".pi", "agent", "repo-boundary-guard-approvals.jsonl");
+}
+
+function approvalKey(toolName: string, resolvedPath: string): string {
+	return `${toolName}\0${path.normalize(resolvedPath)}`;
+}
+
+function readRememberedApprovals(): Set<string> {
+	try {
+		const approvals = new Set<string>();
+		const log = readFileSync(approvalLogPath(), "utf8");
+		for (const line of log.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const entry = JSON.parse(line) as { toolName?: unknown; label?: unknown; resolved?: unknown };
+				const toolName = typeof entry.toolName === "string" ? entry.toolName : entry.label;
+				if (typeof toolName === "string" && typeof entry.resolved === "string") {
+					approvals.add(approvalKey(toolName, entry.resolved));
+				}
+			} catch {
+				// Ignore malformed log entries so a bad line does not disable the guard.
+			}
+		}
+		return approvals;
+	} catch {
+		return new Set();
+	}
+}
+
+function rememberApprovals(root: string, toolName: string, outside: Array<{ original: string; resolved: string }>, details?: string) {
+	const logPath = approvalLogPath();
+	mkdirSync(path.dirname(logPath), { recursive: true });
+	const timestamp = new Date().toISOString();
+	const lines = outside.map(({ original, resolved }) =>
+		JSON.stringify({ timestamp, repoRoot: root, toolName, original, resolved: path.normalize(resolved), details })
+	);
+	appendFileSync(logPath, `${lines.join("\n")}\n`, "utf8");
+}
+
+function filterRememberedOutsidePaths(toolName: string, outside: Array<{ original: string; resolved: string }>) {
+	const remembered = readRememberedApprovals();
+	return outside.filter(({ resolved }) => !remembered.has(approvalKey(toolName, resolved)));
+}
+
+function formatOutsideAccess(toolName: string, root: string, outside: Array<{ original: string; resolved: string }>, details?: string) {
+	const files = outside
+		.map(({ original, resolved }) => `- File: ${original}\n  Resolved: ${resolved}`)
+		.join("\n");
+	const detailsBlock = details ? `\n\n${details}` : "";
+	return `Tool: ${toolName}${detailsBlock}\n\nRepo: ${root}\n\nOutside repo file(s):\n${files}`;
 }
 
 function toolPaths(toolName: string, input: Record<string, unknown>): string[] {
@@ -84,22 +137,29 @@ async function approveOutsidePaths(
 	label: string,
 	details?: string,
 ) {
-	const outside = outsidePaths(root, cwd, paths);
+	const outside = filterRememberedOutsidePaths(label, outsidePaths(root, cwd, paths));
 	if (outside.length === 0) return undefined;
 
-	const message = outside.map(({ original, resolved }) => `- ${original} -> ${resolved}`).join("\n");
-	const detailsBlock = details ? `\n\n${details}` : "";
+	const message = formatOutsideAccess(label, root, outside, details);
 	if (!ctx.hasUI) {
-		return { block: true, reason: `${label} outside repo blocked (no UI for approval):${detailsBlock}\n\n${message}` };
+		return { block: true, reason: `Outside repo access blocked (no UI for approval):\n\n${message}` };
 	}
 
-	const ok = await ctx.ui.confirm(
-		"Outside repo access",
-		`${label} wants to access path(s) outside the repo root:${detailsBlock}\n\nRepo: ${root}\n\n${message}\n\nAllow this tool call?`,
+	const choice = await ctx.ui.select(
+		`Outside repo access requested:\n\n${message}`,
+		[
+			"Allow and remember globally",
+			"Allow once",
+			"Block",
+		],
 	);
 
-	if (!ok) return { block: true, reason: `Blocked outside repo access:${detailsBlock}\n\n${message}` };
-	return undefined;
+	if (choice === "Allow and remember globally") {
+		rememberApprovals(root, label, outside, details);
+		return undefined;
+	}
+	if (choice === "Allow once") return undefined;
+	return { block: true, reason: `Blocked outside repo access:\n\n${message}` };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -122,15 +182,15 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("user_bash", async (event, ctx) => {
 		const root = repoRoot(event.cwd);
-		const outside = outsidePaths(root, event.cwd, bashPaths(event.command));
+		const outside = filterRememberedOutsidePaths("user_bash", outsidePaths(root, event.cwd, bashPaths(event.command)));
 		if (outside.length === 0) return undefined;
 
-		const message = outside.map(({ original, resolved }) => `- ${original} -> ${resolved}`).join("\n");
 		const commandBlock = `Command:\n${event.command}`;
+		const message = formatOutsideAccess("user_bash", root, outside, commandBlock);
 		if (!ctx.hasUI) {
 			return {
 				result: {
-					output: `user bash outside repo blocked (no UI for approval):\n\n${commandBlock}\n\n${message}`,
+					output: `Outside repo access blocked (no UI for approval):\n\n${message}`,
 					exitCode: 1,
 					cancelled: false,
 					truncated: false,
@@ -138,15 +198,23 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 
-		const ok = await ctx.ui.confirm(
-			"Outside repo access",
-			`user bash wants to access path(s) outside the repo root:\n\n${commandBlock}\n\nRepo: ${root}\n\n${message}\n\nAllow this command?`,
+		const choice = await ctx.ui.select(
+			`Outside repo access requested:\n\n${message}`,
+			[
+				"Allow and remember globally",
+				"Allow once",
+				"Block",
+			],
 		);
-		if (ok) return undefined;
+		if (choice === "Allow and remember globally") {
+			rememberApprovals(root, "user_bash", outside, commandBlock);
+			return undefined;
+		}
+		if (choice === "Allow once") return undefined;
 
 		return {
 			result: {
-				output: `Blocked outside repo access:\n\n${commandBlock}\n\n${message}`,
+				output: `Blocked outside repo access:\n\n${message}`,
 				exitCode: 1,
 				cancelled: false,
 				truncated: false,
