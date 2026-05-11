@@ -7,16 +7,11 @@ These instructions apply to this repository.
 This repo contains pi coding agent extensions. Current extensions:
 
 - `goal.ts` — adds `/goal <objective>` objective mode, looping until the assistant emits `</objective_complete>`.
-- `repo-boundary-guard.ts` — prompts before tool calls or shell commands access paths outside the current Git repository.
 
 ## Working guidelines
 
 - Keep extension code small, readable, and dependency-light.
-- Treat filesystem safety checks conservatively.
-- Do not broaden access without an explicit approval path.
-- Remember that shell parsing in `repo-boundary-guard.ts` is best-effort, not a sandbox.
 - For `goal.ts`, keep the completion-token contract explicit and avoid hidden infinite loops without user-visible state.
-- Prefer clear user-facing block/approval messages that include the original path, resolved path, command, and repo root when useful.
 
 ## Code style
 
@@ -27,14 +22,13 @@ This repo contains pi coding agent extensions. Current extensions:
 
 ## Validation
 
-There is currently no package manifest or automated test suite. After edits, validate with at least:
+After edits, validate with at least:
 
 ```bash
+npm run typecheck
 git diff --check
 git status --short
 ```
-
-If a TypeScript project setup is added later, also run the relevant typecheck/test commands and update this file.
 
 ## Git hygiene
 
