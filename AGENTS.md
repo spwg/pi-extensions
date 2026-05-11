@@ -4,8 +4,9 @@ These instructions apply to this repository.
 
 ## Repository purpose
 
-This repo contains pi coding agent extensions. Current extension:
+This repo contains pi coding agent extensions. Current extensions:
 
+- `goal.ts` — adds `/goal <objective>` objective mode, looping until the assistant emits `</objective_complete>`.
 - `repo-boundary-guard.ts` — prompts before tool calls or shell commands access paths outside the current Git repository.
 
 ## Working guidelines
@@ -14,6 +15,7 @@ This repo contains pi coding agent extensions. Current extension:
 - Treat filesystem safety checks conservatively.
 - Do not broaden access without an explicit approval path.
 - Remember that shell parsing in `repo-boundary-guard.ts` is best-effort, not a sandbox.
+- For `goal.ts`, keep the completion-token contract explicit and avoid hidden infinite loops without user-visible state.
 - Prefer clear user-facing block/approval messages that include the original path, resolved path, command, and repo root when useful.
 
 ## Code style

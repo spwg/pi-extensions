@@ -4,6 +4,21 @@ Small extensions for the [pi coding agent](https://github.com/mariozechner/pi-co
 
 ## Extensions
 
+### `goal.ts`
+
+A `/goal <objective>` command for objective mode. It keeps the agent working toward a terminal state until the assistant emits the exact completion token:
+
+```text
+</objective_complete>
+```
+
+Additional commands:
+
+- `/goal status` — show the active goal
+- `/goal stop` — cancel objective mode
+
+While active, the extension injects objective-mode instructions each turn and queues a follow-up prompt when the completion token is absent.
+
 ### `repo-boundary-guard.ts`
 
 A safety extension that helps prevent accidental access outside the current Git repository.
@@ -20,17 +35,18 @@ The bash path detection is best-effort. It catches common cases like absolute pa
 
 ## Usage
 
-Copy or reference `repo-boundary-guard.ts` from your pi extension configuration.
+Enable these files from your global pi settings, for example:
 
-Example extension export:
-
-```ts
-import repoBoundaryGuard from "./repo-boundary-guard";
-
-export default repoBoundaryGuard;
+```json
+{
+  "extensions": [
+    "/Users/spencergreene/github/pi-extensions/repo-boundary-guard.ts",
+    "/Users/spencergreene/github/pi-extensions/goal.ts"
+  ]
+}
 ```
 
-Then enable the extension in your pi setup according to the pi extension documentation.
+Then run `/reload` in an existing pi session.
 
 ## Development
 
